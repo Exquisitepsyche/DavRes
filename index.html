@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flipbook Reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0a0a0a; --fg:#f5f0e8; --accent:#c0392b; --muted:#8a857d; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; }
+  body { background:radial-gradient(ellipse at center,#1c1c1c 0%,var(--bg) 70%); color:var(--fg);
+         font-family:Montserrat,system-ui,sans-serif; overflow:hidden; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; gap:12px; }
+  header h1 { font-size:14px; font-weight:600; letter-spacing:.15em; text-transform:uppercase;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .btn { background:transparent; color:var(--fg); border:1px solid #333; border-radius:6px; padding:8px 12px;
+         font:inherit; font-size:13px; cursor:pointer; transition:.2s; }
+  .btn:hover { border-color:var(--accent); color:#fff; }
+  .btn:disabled { opacity:.3; cursor:default; }
+  main { flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:0; padding:8px 16px; }
+  #book { opacity:0; transform:scale(.92) translateY(20px); transition:opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1); }
+  #book.ready { opacity:1; transform:none; }
+  .page { background:#fff; box-shadow:inset 0 0 30px rgba(0,0,0,.08); }
+  .page img { width:100%; height:100%; object-fit:contain; display:block; }
+  footer { display:flex; align-items:center; justify-content:center; gap:10px; padding:12px 16px 18px; flex-wrap:wrap; }
+  #counter { min-width:90px; text-align:center; font-size:13px; color:var(--muted); }
+  input[type=range] { width:min(320px,50vw); accent-color:var(--accent); }
+  #drop { position:absolute; inset:16px; border:2px dashed #333; border-radius:14px; display:flex; flex-direction:column;
+          align-items:center; justify-content:center; gap:14px; text-align:center; color:var(--muted); transition:.2s; }
+  #drop.over { border-color:var(--accent); color:var(--fg); background:rgba(192,57,43,.06); }
+  #drop strong { color:var(--fg); font-size:18px; font-weight:600; }
+  #loader { position:absolute; display:none; flex-direction:column; align-items:center; gap:14px; font-size:13px; color:var(--muted); }
+  #loader .bar { width:220px; height:3px; background:#222; border-radius:2px; overflow:hidden; }
+  #loader .bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .hidden { display:none !important; }
+  .nav { position:absolute; top:50%; transform:translateY(-50%); font-size:28px; width:44px; height:44px; border-radius:50%;
+         display:flex; align-items:center; justify-content:center; padding:0; background:rgba(0,0,0,.4); }
+  #prev { left:12px; } #next { right:12px; }
+  @media (max-width:600px){ .nav{display:none;} }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Flipbook</h1>
+  <div style="display:flex;gap:8px">
+    <button class="btn" id="openBtn">Open PDF</button>
+    <button class="btn" id="fsBtn" title="Fullscreen">⛶</button>
+    <input type="file" id="file" accept="application/pdf" hidden>
+  </div>
+</header>
+
+<main id="stage">
+  <div id="drop">
+    <strong>Drop a PDF here</strong>
+    <span>or</span>
+    <button class="btn" onclick="document.getElementById('file').click()">Choose a file</button>
+    <span style="font-size:12px">Tip: share a book with <code>?pdf=pdfs/your-file.pdf</code></span>
+  </div>
+  <div id="loader"><span id="loadText">Loading…</span><div class="bar"><i id="barFill"></i></div></div>
+  <div id="book"></div>
+  <button class="btn nav hidden" id="prev">‹</button>
+  <button class="btn nav hidden" id="next">›</button>
+</main>
+
+<footer id="controls" class="hidden">
+  <button class="btn" id="first">⏮</button>
+  <input type="range" id="slider" min="0" value="0">
+  <span id="counter"></span>
+  <button class="btn" id="last">⏭</button>
+  <button class="btn" id="dl">Download</button>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+const $ = id => document.getElementById(id);
+let flip = null, pdfUrl = null, total = 0;
+
+// Flip sound, synthesized so there is no audio file to host
+function flipSound() {
+  try {
+    const ctx = flipSound.ctx || (flipSound.ctx = new AudioContext());
+    const len = ctx.sampleRate * 0.25, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 3) * 0.25;
+    const src = ctx.createBufferSource(), f = ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.frequency.value = 2500; src.buffer = buf; src.connect(f).connect(ctx.destination); src.start();
+  } catch (e) {}
+}
+
+async function loadPdf(source, name) {
+  $('drop').classList.add('hidden');
+  $('loader').style.display = 'flex';
+  $('book').classList.remove('ready');
+  if (flip) { flip.destroy(); flip = null; $('stage').insertBefore(Object.assign(document.createElement('div'), {id:'book'}), $('prev')); }
+  $('title').textContent = name || 'Flipbook';
+  document.title = (name || 'Flipbook') + ' · Flipbook';
+
+  try {
+    const pdf = await pdfjsLib.getDocument(source).promise;
+    total = pdf.numPages;
+    const first = await pdf.getPage(1);
+    const vp1 = first.getViewport({ scale: 1 });
+    const ratio = vp1.height / vp1.width;
+    const scale = Math.min(2.5, 1600 / vp1.height) * (window.devicePixelRatio > 1 ? 1 : 0.75);
+
+    const book = $('book');
+    for (let i = 1; i <= total; i++) {
+      $('loadText').textContent = `Rendering page ${i} / ${total}`;
+      $('barFill').style.width = (i / total * 100) + '%';
+      const page = i === 1 ? first : await pdf.getPage(i);
+      const vp = page.getViewport({ scale });
+      const c = document.createElement('canvas');
+      c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      const div = document.createElement('div');
+      div.className = 'page';
+      if (i === 1 || i === total) div.dataset.density = 'hard';
+      const img = new Image(); img.src = c.toDataURL('image/jpeg', 0.88);
+      div.appendChild(img); book.appendChild(div);
+    }
+
+    const w = 550;
+    flip = new St.PageFlip(book, {
+      width: w, height: Math.round(w * ratio), size: 'stretch',
+      minWidth: 250, maxWidth: 1000, minHeight: 250 * ratio, maxHeight: 1400,
+      maxShadowOpacity: 0.6, showCover: true, mobileScrollSupport: false, flippingTime: 800,
+    });
+    flip.loadFromHTML(book.querySelectorAll('.page'));
+    flip.on('flip', e => { flipSound(); update(e.data); });
+    $('slider').max = total - 1;
+    update(0);
+    $('loader').style.display = 'none';
+    ['controls','prev','next'].forEach(id => $(id).classList.remove('hidden'));
+    requestAnimationFrame(() => book.classList.add('ready'));
+  } catch (err) {
+    console.error(err);
+    $('loader').style.display = 'none';
+    $('drop').classList.remove('hidden');
+    alert('Could not open this PDF: ' + err.message);
+  }
+}
+
+function update(i) {
+  $('slider').value = i;
+  const orient = flip && flip.getOrientation && flip.getOrientation();
+  const label = (orient === 'landscape' && i > 0 && i < total - 1) ? `${i + 1}–${Math.min(i + 2, total)}` : `${i + 1}`;
+  $('counter').textContent = `${label} / ${total}`;
+}
+
+// Controls
+$('prev').onclick = () => flip && flip.flipPrev();
+$('next').onclick = () => flip && flip.flipNext();
+$('first').onclick = () => flip && flip.flip(0);
+$('last').onclick = () => flip && flip.flip(total - 1);
+$('slider').oninput = e => flip && flip.turnToPage(+e.target.value) & update(+e.target.value);
+$('dl').onclick = () => { if (!pdfUrl) return; const a = document.createElement('a'); a.href = pdfUrl; a.download = $('title').textContent + '.pdf'; a.click(); };
+$('fsBtn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+$('openBtn').onclick = () => $('file').click();
+document.addEventListener('keydown', e => {
+  if (!flip) return;
+  if (e.key === 'ArrowRight') flip.flipNext();
+  if (e.key === 'ArrowLeft') flip.flipPrev();
+});
+
+function openFile(file) {
+  if (!file || file.type !== 'application/pdf') return;
+  pdfUrl = URL.createObjectURL(file);
+  loadPdf(pdfUrl, file.name.replace(/\.pdf$/i, ''));
+}
+$('file').onchange = e => openFile(e.target.files[0]);
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+document.addEventListener('drop', e => openFile(e.dataTransfer.files[0]));
+
+// ?pdf=pdfs/book.pdf  →  open a hosted PDF directly (shareable link)
+const param = new URLSearchParams(location.search).get('pdf');
+if (param) { pdfUrl = param; loadPdf(param, decodeURIComponent(param.split('/').pop().replace(/\.pdf$/i, ''))); }
+</script>
+</body>
+</html>
