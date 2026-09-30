@@ -19,3 +19,12 @@ Built on [PDF.js](https://mozilla.github.io/pdf.js/) (renders pages) and
    Since vaoprod is on Cloudflare DNS, the CNAME is created automatically; HTTPS in a few minutes.
 
 Every push to the branch redeploys automatically. Free tier: unlimited bandwidth, 25 MB per file.
+
+---
+
+# VAO Shotbook (`storyboard/`)
+
+Reference and storyboard app for architecture and real estate films: feelings turned into camera
+recipes, 169 techniques with their effect on the viewer, 11 story arcs, a live 3D previs villa,
+a sun planner and a light-ordered shoot plan. Open `storyboard/index.html` through any static
+server, or see [storyboard/README.md](storyboard/README.md) for hosting and details.
